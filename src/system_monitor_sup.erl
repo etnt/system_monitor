@@ -15,8 +15,16 @@
 %%--------------------------------------------------------------------------------
 -module(system_monitor_sup).
 
+-ifdef(USE_OTP_SUPERVISOR).
+-define(SUPERVISOR, supervisor).
+-define(PERMANENT_15, permanent).
+-else.
+-define(SUPERVISOR, supervisor3).
+-define(PERMANENT_15, {permanent,15}).
+-endif.
+
 %% TODO: Dialyzer doesn't like this one:
-%-behaviour(supervisor3).
+%-behaviour(?SUPERVISOR).
 
 %% External exports
 -export([start_link/0]).
@@ -34,7 +42,7 @@
 %%% API
 %%%----------------------------------------------------------------------
 start_link() ->
-    supervisor3:start_link({local, ?SERVER}, ?MODULE, ?SERVER).
+    ?SUPERVISOR:start_link({local, ?SERVER}, ?MODULE, ?SERVER).
 
 %%%----------------------------------------------------------------------
 %%% Callback functions from supervisor
@@ -44,7 +52,7 @@ server(Name, Type) ->
     server(Name, Type, 2000).
 
 server(Name, Type, Shutdown) ->
-    {Name, {Name, start_link, []}, {permanent, 15}, Shutdown, Type, [Name]}.
+    {Name, {Name, start_link, []}, ?PERMANENT_15, Shutdown, Type, [Name]}.
 
 worker(Name) -> server(Name, worker).
 
@@ -58,7 +66,7 @@ init(?SERVER) ->
     %% unavailable should be directly under this supervisor.
 
     SecondSup = {?SUP2,
-                 {supervisor3, start_link,
+                 {?SUPERVISOR, start_link,
                   [{local, ?SUP2}, ?MODULE, ?SUP2]},
                  permanent, 2000, supervisor, [?MODULE]},
 

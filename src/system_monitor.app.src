@@ -74,5 +74,18 @@
 
       %% Don't query memory if message_queue_len is longer than this:
     , {mql_limit_for_memory, 100000}
+
+      %% Enable/Disable system_monitor_producer
+    , {producer_enable, false}
+      %% where we should connect to the Consumer
+    , {producer_ip, {192,168,1,170}}
+    , {producer_port, 8888}
+
+      %% Enable/Disable system_monitor_consumer
+    , {consumer_enable, false}
+    , {consumer_secret, undefined}
+      %% what IP/Port the Consumer should listen to
+    , {consumer_listen_ip, {0,0,0,0}}
+    , {consumer_listen_port, 8888}
     ]}
  ]}.
