@@ -24,9 +24,13 @@
  , {mod,          {system_monitor_app, []}}
  , {applications, [kernel, stdlib, supervisor3, epgsql]}
  , {env,
-    [ %% Specifies how many topmost processes should be reported per
+    [ %% Supervisor restart intensity, specified as: {MaxR,MaxT}
+      %% If more than MaxR number of restarts occur in the last MaxT seconds,
+      %% the supervisor terminates all the child processes and then itself.
+      {restart_intensity, {10,20}}
+      %% Specifies how many topmost processes should be reported per
       %% category (such as `top_memory', `top_reductions', etc.)
-      {top_num_items, 10}
+    , {top_num_items, 10}
       %% Specifies how often process top should be collected (in ms):
     , {top_sample_interval, 2000}
       %% Specifies sample size for the approximate metrics, such as
@@ -74,5 +78,59 @@
 
       %% Don't query memory if message_queue_len is longer than this:
     , {mql_limit_for_memory, 100000}
-    ]}
- ]}.
+
+      %%
+      %% P R O D U C E R (client)
+      %%
+      %% Enable/Disable system_monitor_producer
+    , {producer_enable, false}
+      %% where we should connect to the Consumer
+    , {producer_ip, {192,168,1,170}}
+    , {producer_port, 8888}
+      %% Use TLS (or not)
+    , {producer_use_tls, true}
+    , {producer_tls_opts,
+       [ {verify, verify_peer}
+       , {log_level, info}       % set to 'debug' for loads of output
+       , {versions, ['tlsv1.2']}
+         %% Note: when `verify` is set to `verify_peer`, we want to
+         %% disable the Hostname check.
+       , {server_name_indication, disable}
+       , {cacertfile, ".../CA/certs/cacert.pem"}
+       , {certfile, ".../CA/client_keys/client@acme.com.pem"}
+       ]}
+
+      %%
+      %% C O N S U M E R (server)
+      %%
+      %% Enable/Disable system_monitor_consumer
+    , {consumer_enable, false}
+      %% what IP/Port the Consumer should listen to
+    , {consumer_listen_ip, {0,0,0,0}}
+    , {consumer_listen_port, 8888}
+      %% Use TLS (or not)
+    , {consumer_use_tls, true}
+    , {consumer_tls_opts,
+       [ {verify, verify_peer}
+         %% Used together with 'verify_peer}'. If set to true,
+         %% the server fails if the client does not have a certificate
+         %% to send, that is, sends an empty certificate. If set to
+         %% false, it fails only if the client sends an invalid
+         %% certificate (an empty certificate is considered valid).
+         %% Defaults to false.
+       , {fail_if_no_peer_cert, true}
+       , {log_level, info}       % set to 'debug' for loads of output
+       , {versions, ['tlsv1.2']}
+       , {cacertfile, ".../CA/certs/cacert.pem"}
+       , {certfile, ".../CA/certs/server.crt"}
+       , {keyfile, ".../CA/certs/server.key"}
+         %% Perform CRL (Certificate Revocation List) verification
+         %% on the peer certificate.
+       , {crl_check, peer}
+       , {crl_cache, {ssl_crl_hash_dir, {internal, [{dir, ".../CA/crl"}]}}}
+       ]
+      }
+    ]
+   }
+ ]
+}.

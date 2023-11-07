@@ -26,3 +26,6 @@ clean:
 .PHONY: hex-publish
 hex-publish: clean
 	rebar3 as dev hex publish
+
+
+include consumer_producer.mk

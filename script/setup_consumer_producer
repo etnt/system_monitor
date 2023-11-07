@@ -1,0 +1,325 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%% --------------------------------------------------------------------
+%%% @author Torbjörn Törnkvist <kruskakli@gmail.com>
+%%% @copyright (C) 2023, Torbjörn Törnkvist
+%%% @doc Set config in given .app/.app.src file for Consumer/Producer use
+%%%
+%%% * Modify the given "X.app" (or "X.app.src") file by setting
+%%%   any of the environment variable (env_vars/0) values.
+%%%
+%%% * Enable our Producer callback.
+%%%
+%%% * Disable auto start of any application.
+%%%
+%%% * Remove the 'supervisor3' dependency and add our dependencies.
+%%%
+%%% * Save a backup copy of the modified file.
+%%%
+%%% @end
+%%% --------------------------------------------------------------------
+
+env_vars() ->
+    [ "CONSUMER_ENABLE"
+    , "CONSUMER_LISTEN_IP"
+    , "CONSUMER_LISTEN_PORT"
+    , "CONSUMER_USE_TLS"
+    , "CONSUMER_CACERTFILE"
+    , "CONSUMER_CERTFILE"
+    , "CONSUMER_KEYFILE"
+    , "CONSUMER_CRLDIR"
+    , "PRODUCER_ENABLE"
+    , "PRODUCER_IP"
+    , "PRODUCER_PORT"
+    , "PRODUCER_USE_TLS"
+    , "PRODUCER_CACERTFILE"
+    , "PRODUCER_CERTFILE"
+    ].
+
+-define(dbg(FmtStr, Args), dbg(FmtStr, Args, ?LINE)).
+
+
+main(Args) ->
+    try
+        #{app_file := AppFile} = ArgsMap = parse_args(Args),
+        {ok,AppData} = file:consult(AppFile),
+        EnvMap = get_env(ArgsMap),
+        NewAppData = massage_app_data(AppData, EnvMap),
+        save_file(AppFile, erlang:hd(NewAppData)),
+        halt(0)
+    catch
+        throw:no_app_file ->
+            io:format("<ERROR> no app file specified~n",[]),
+            usage();
+        throw:both_only ->
+            io:format("<ERROR> can't have both '-c' and '-p'~n",[]),
+            usage();
+        _Etype:_Err:_Estack ->
+            io:format("<ERROR> ~p~n",[{_Etype,_Err,_Estack}]),
+            usage()
+    end;
+main(_) ->
+    usage().
+
+usage() ->
+    io:format("Usage: setup_consumer_producer [<flags>] <app-file>~n"
+              "~n"
+              "  Flags:~n"
+              "~n"
+              "           -s  ::  silent, no output~n"
+              "    [-c | -p]  ::  enable Consumer/Producer only~n"
+             ,[]),
+    halt(1).
+
+
+parse_args(Args) ->
+    put(silent, false),
+    InitMap = init_map(),
+    case do_parse_args(Args, InitMap) of
+        #{enable_consumer_only := true,
+          enable_producer_only := true} ->
+            throw(both_only);
+        Map ->
+            ?dbg("Finished parse_arg, Map = ~p~n",[Map]),
+            Map
+    end.
+
+do_parse_args(["-c" | Tail], Map) ->
+    do_parse_args(Tail, Map#{enable_consumer_only => true});
+do_parse_args(["-p" | Tail], Map) ->
+    do_parse_args(Tail, Map#{enable_producer_only => true});
+do_parse_args(["-s" | Tail], Map) ->
+    put(silent, true),
+    do_parse_args(Tail, Map);
+do_parse_args(["-d" | Tail], Map) ->
+    put(debug, true),
+    do_parse_args(Tail, Map);
+do_parse_args([PathToAppFile], Map) ->
+    Map#{app_file => PathToAppFile};
+do_parse_args([], _) ->
+    throw(no_app_file).
+
+init_map() ->
+    #{}.
+
+
+ foldf(Db, Funs) ->
+     lists:foldl(fun(F, Acc) -> F(Acc) end, Db, Funs).
+
+our_dependencies(#{enable_consumer_only := true}) ->
+     [cowlib,ranch,cowboy];
+ our_dependencies(#{enable_producer_only := true}) ->
+     [cowlib,gun];
+ our_dependencies(_) ->
+     our_dependencies().
+
+ our_dependencies() ->
+     [cowlib,ranch,cowboy,gun].
+
+fix_dependencies_f(EnvMap) ->
+    fun(D) ->
+            %% Remove the dependency to supervisor3
+            {applications, Apps0} = lists:keyfind(applications, 1, D),
+            Apps1 = lists:delete(supervisor3, Apps0),
+
+            %% Remove epgsql (postgres) application unless consumer.
+            Apps2 =
+                case maps:is_key(enable_producer_only, EnvMap) of
+                    true  -> lists:delete(epgsql, Apps1);
+                    false -> Apps1
+                end,
+
+            %% Add our dependencies
+            Apps3 = Apps2 -- our_dependencies(),
+            Apps = Apps3 ++ our_dependencies(EnvMap),
+            lists:keyreplace(applications, 1, D, {applications, Apps})
+    end.
+
+
+%% Remove the 'mod', i.e disable auto start of any application.
+rm_mod_f() ->
+    fun(D) -> lists:keydelete(mod, 1, D) end.
+
+
+maybe_enable_producer_callback_f(#{enable_consumer_only := true}) ->
+    id_f();
+maybe_enable_producer_callback_f(#{producer_enable := true}) ->
+    fun(D) ->
+            %% Enable our Producer callback
+            lists:keystore(callback_mod, 1, D,
+                           {callback_mod, system_monitor_producer})
+    end;
+maybe_enable_producer_callback_f(_EnvMap) ->
+    id_f().
+
+
+id_f() -> fun(D) -> D end.
+
+
+massage_app_data([{application, system_monitor, Data}], EnvMap) ->
+    ?dbg("Enter massage_app_data, EnvMap = ~p~n",[EnvMap]),
+    Data0 =
+        foldf(
+          Data,
+          [ fix_dependencies_f(EnvMap)
+          , rm_mod_f()
+          ]
+         ),
+
+     {env, Env} = lists:keyfind(env, 1, Data0),
+
+    ?dbg("massage_app_data~n",[]),
+    Env0 =
+        foldf(
+          Env,
+          [ maybe_enable_producer_callback_f(EnvMap)
+          ]
+         ),
+
+    %% Modify the Application 'env' according to any
+    %% existing environment variables.
+    AtomEnvVars = atom_env_vars(),
+    Env1 =
+        maps:fold(
+          fun(Key, Val, Acc) ->
+                  case lists:member(Key, AtomEnvVars) of
+                      true ->
+                          replace(Key, Val, Acc, EnvMap);
+                      false ->
+                          Acc
+                  end
+          end, Env0, EnvMap),
+
+    %% Reconstruct the application data
+    Data1 = lists:keyreplace(env, 1, Data0, {env, Env1}),
+
+    [{application, system_monitor, Data1}].
+
+
+replace(consumer_enable = Key, _Val, Acc, #{enable_producer_only := true}) ->
+    lists:keyreplace(Key, 1, Acc, {Key, false});
+%%
+replace(producer_enable = Key, _Val, Acc, #{enable_consumer_only := true}) ->
+    lists:keyreplace(Key, 1, Acc, {Key, false});
+%%
+replace(consumer_cacertfile, Val, Acc, EnvMap) ->
+    replace_in(consumer_tls_opts, cacertfile, Val, Acc, EnvMap);
+%%
+replace(consumer_certfile, Val, Acc, EnvMap) ->
+    replace_in(consumer_tls_opts, certfile, Val, Acc, EnvMap);
+%%
+replace(consumer_keyfile, Val, Acc, EnvMap) ->
+    replace_in(consumer_tls_opts, keyfile, Val, Acc, EnvMap);
+%%
+replace(consumer_crldir, Val, Acc, EnvMap) ->
+    CRL_cacheVal = {ssl_crl_hash_dir, {internal, [{dir, Val}]}},
+    replace_in(consumer_tls_opts, crl_cache, CRL_cacheVal, Acc, EnvMap);
+%%
+replace(producer_cacertfile, Val, Acc, EnvMap) ->
+    replace_in(producer_tls_opts, cacertfile, Val, Acc, EnvMap);
+%%
+replace(producer_certfile, Val, Acc, EnvMap) ->
+    replace_in(producer_tls_opts, certfile, Val, Acc, EnvMap);
+%%
+replace(Key, Val, Acc, _EnvMap) ->
+    lists:keyreplace(Key, 1, Acc, {Key, Val}).
+
+
+replace_in(OuterKey, InnerKey, Val, Acc, _EnvMap) ->
+    case lists:keyfind(OuterKey, 1, Acc) of
+        {OuterKey, L} ->
+            L2 = lists:keyreplace(InnerKey, 1, L, {InnerKey, Val}),
+            lists:keyreplace(OuterKey, 1, Acc, {OuterKey, L2});
+        _ ->
+            Acc
+    end.
+
+
+
+%% Read any relevant environment variables and store them in a Map.
+get_env(Map0) ->
+    ?dbg("Enter get_env~n",[]),
+    lists:foldl(
+      fun(EVar, Map) ->
+              case get_env_var(EVar) of
+                  {ok, X} -> insert(EVar, X, Map);
+                  _       -> Map
+              end
+      end, Map0, env_vars()).
+
+atom_env_vars() ->
+    [str2lower_case_atom(StrKey) || StrKey <- env_vars()].
+
+insert(StrKey, Val, Map) ->
+    Key = str2lower_case_atom(StrKey),
+    maps:put(Key, convert(Key, Val), Map).
+
+str2lower_case_atom(Str) ->
+    erlang:list_to_atom(string:lowercase(Str)).
+
+convert(consumer_enable, Val) ->
+    erlang:list_to_atom(Val);
+convert(consumer_listen_ip, Val) ->
+    {ok, IP} = inet:parse_address(Val),
+    IP;
+convert(consumer_listen_port, Val) ->
+    erlang:list_to_integer(Val);
+convert(consumer_use_tls, Val) ->
+    erlang:list_to_atom(Val);
+convert(consumer_cacertfile, Val) ->
+    Val;
+convert(consumer_certfile, Val) ->
+    Val;
+convert(consumer_keyfile, Val) ->
+    Val;
+convert(consumer_crldir, Val) ->
+    Val;
+%%
+convert(producer_enable, Val) ->
+    erlang:list_to_atom(Val);
+convert(producer_ip, Val) ->
+    {ok, IP} = inet:parse_address(Val),
+    IP;
+convert(producer_port, Val) ->
+    erlang:list_to_integer(Val);
+convert(producer_use_tls, Val) ->
+    erlang:list_to_atom(Val);
+convert(producer_cacertfile, Val) ->
+    Val;
+convert(producer_certfile, Val) ->
+    Val.
+
+
+get_env_var(EVar) ->
+    case os:getenv(EVar) of
+        false -> false;
+        X     -> {ok,X}
+    end.
+
+
+log(FmtStr, Args) ->
+    case get(silent) of
+        true -> false;
+        _    -> io:format(FmtStr, Args)
+    end.
+
+dbg(FmtStr, Args, Line) ->
+    case get(debug) of
+        true -> io:format("<DEBUG> ~p: "++FmtStr, [Line|Args]);
+        _    -> false
+    end.
+
+save_file(Filename, Term) ->
+    ?dbg("Enter save_file~n",[]),
+    TS = integer_to_list(calendar:datetime_to_gregorian_seconds({date(),
+                                                                 time()})),
+    BackupFilename = Filename ++ ".bak-" ++ TS,
+    {ok, _BytesCopied} = file:copy(Filename, BackupFilename),
+    log("<INFO> copied file: ~p to: ~p~n",[Filename, BackupFilename]),
+    {ok,Fd} = file:open(Filename,[write]),
+    try
+        io:format(Fd, "~p.~n", [Term])
+    after
+        log("<INFO> wrote file: ~p~n",[Filename]),
+        file:close(Fd)
+    end.
