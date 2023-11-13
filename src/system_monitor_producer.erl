@@ -32,6 +32,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-define(dbg(FmtStr, Args), io:format("~p~p: "++FmtStr,[?MODULE,?LINE|Args])).
+
 -define(SERVER, ?MODULE).
 -define(FIVE_SECONDS, 5000).
 -define(ONE_HOUR, 60*60*1000).
@@ -41,6 +43,7 @@
         , stream_ref
         , cfg_map
         , state :: undefined | init | auth | handshake | running
+        , client_challenge
         }).
 
 %%%===================================================================
@@ -98,19 +101,21 @@ continue(State) ->
         {ok, ConnPid} = gun:open(IP, Port),
         {ok, _Protocol} = gun:await_up(ConnPid),
 
-        Token = mk_token(CfgMap),
+        Challenge = mk_challenge(),
+        Challenge64 = base64:encode(Challenge),
         gun:ws_upgrade(ConnPid, "/",
                        [
-                        {<<"authorization">>, <<"Bearer ", Token/binary>>}
+                        {<<"authorization">>, <<"Bearer ", Challenge64/binary>>}
                        ]),
 
         %% Now, wait for the gun_upgrade message to arrive.
-        {noreply, State#state{state = auth}}
+        {noreply, State#state{state = sent_challenge,
+                              client_challenge = Challenge}}
 
     catch
         _Etype:_Err:_Estack ->
             %% FIXME log error
-            io:format(">>> ~p:~p ERROR: ~p~n",[?MODULE,?LINE,{_Etype,_Err,_Estack}]),
+            ?dbg("<ERROR> ~p~n",[{_Etype,_Err,_Estack}]),
             {noreply, State}
     end.
 
@@ -122,12 +127,9 @@ producer_config() ->
     [producer_enable, producer_ip, producer_port, consumer_secret].
 
 
-mk_token(CfgMap) ->
-    Secret = maps:get(consumer_secret, CfgMap),
-    Nonce = system_monitor_consumer:nonce(),
-    Digest = system_monitor_consumer:digest(Secret, Nonce),
-    system_monitor_consumer:encode_token(Nonce, Digest).
 
+mk_challenge() ->
+    system_monitor_consumer:nonce().
 
 
 %%--------------------------------------------------------------------
@@ -169,9 +171,9 @@ handle_cast({produce, _Type, _Events} = Msg,
     MsgBin = erlang:term_to_binary(Msg),
     ok = gun:ws_send(ConnPid, StreamRef, {binary, MsgBin}),
     {noreply, State};
-
+%%
 handle_cast(_Request, State) ->
-    io:format(">>> ~p:~p handle_cast got: Type=~p~n",[?MODULE,?LINE,_Request]),
+    ?dbg("handle_cast got: Type=~p~n",[_Request]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -188,25 +190,60 @@ handle_cast(_Request, State) ->
 
 handle_info({gun_upgrade, ConnPid, StreamRef, [<<"websocket">>], _Headers},
             State) ->
-    io:format(">>> ~p:handle_info got: gun_upgrade~n",[?MODULE]),
-    gun:ws_send(ConnPid, StreamRef, {text, "Hello!"}),
-    {noreply, State#state{state      = handshake,
+    ?dbg("got: gun_upgrade~n",[]),
+    %%gun:ws_send(ConnPid, StreamRef, {text, "Hello!"}),
+    {noreply, State#state{state      = upgraded,
                           conn_pid   = ConnPid,
                           stream_ref = StreamRef} };
 %%
-
-handle_info({gun_ws, _ConnPid, _StreamRef, {text, <<"Consumer says Hello!">>}},
-            State) ->
-    io:format(">>> ~p:handle_info got Hello from Consumer, starting...~n",[?MODULE]),
+handle_info({gun_ws, _ConnPid, _StreamRef, {binary, Bin}},
+            #state{state = upgraded,
+                   conn_pid   = ConnPid,
+                   stream_ref = StreamRef,
+                   cfg_map = CfgMap,
+                   client_challenge = ClientChallenge} = State) ->
+    try erlang:binary_to_term(Bin) of
+        {server_challenge, ServerChallenge, ClientDigest} ->
+            ?dbg("got server_challenge: ~p~n", [ServerChallenge]),
+            ?dbg("...and ClientDigest: ~p~n", [ClientDigest]),
+            Secret = maps:get(consumer_secret, CfgMap),
+            case system_monitor_consumer:verify_digest(Secret,
+                                                       ClientChallenge,
+                                                       ClientDigest) of
+                true ->
+                    ?dbg("client digest verified ok~n",[]),
+                    ?dbg("sending server digest ok~n",[]),
+                    Digest = system_monitor_consumer:digest(Secret,
+                                                            ServerChallenge),
+                    DigestBin = erlang:term_to_binary({digest, Digest}),
+                    ok = gun:ws_send(ConnPid, StreamRef, {binary, DigestBin}),
+                    {noreply, State#state{state = sent_digest}};
+                false ->
+                    ?dbg("failed server digest ok~n",[]),
+                    {stop, verify_digest, State}
+            end;
+        _X ->
+            ?dbg("got wrong msg state=upgraded: ~p~n", [?MODULE]),
+            {stop, upgraded, State}
+    catch
+        _Etype:_Err:_Estack ->
+            %% FIXME log error
+            ?dbg("<ERROR> ~p~n", [{_Etype,_Err,_Estack}]),
+            {stop, binary_to_term, State}
+    end;
+%%
+handle_info({gun_ws, _ConnPid, _StreamRef, {text, <<"welcome">>}},
+            #state{state = sent_digest} = State) ->
+    ?dbg("got Welcome from Consumer, starting...~n", []),
     %% Ok, we are now ready to start sending output to the Consumer!
     {noreply, State#state{state = running}};
 %%
 handle_info({gun_ws, _ConnPid, _StreamRef, Msg}, State) ->
-    io:format(">>> ~p:handle_info got msg: ~p~n",[?MODULE,Msg]),
+    ?dbg("got msg: ~p~n",[Msg]),
     {noreply, State};
 %%
 handle_info(_Info, State) ->
-    io:format(">>> ~p:handle_info: ~p~n",[?MODULE,_Info]),
+    ?dbg("handle_info got: ~p~n",[_Info]),
     {noreply, State}.
 
 

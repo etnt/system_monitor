@@ -42,10 +42,15 @@
 -include_lib("system_monitor/include/system_monitor.hrl").
 -include_lib("kernel/include/logger.hrl").
 
+-define(dbg(FmtStr, Args), io:format("~p~p: "++FmtStr,[?MODULE,?LINE|Args])).
+
 -define(SERVER, ?MODULE).
 -define(FIVE_SECONDS, 5000).
 -define(ONE_HOUR, 60*60*1000).
 
+%% Close codes, see: RFC-6455 section: 7.4
+-define(CC_1000_NORMAL, 1000).
+-define(CC_1002_PROTO_ERROR, 1002).
 -record(state,
         { conn_pid
         , stream_ref
@@ -178,7 +183,7 @@ continue(State) ->
             cowboy_router:compile(
               [
                %% {HostMatch, list({PathMatch, Handler, InitialState})}
-               {'_', [{"/", ?MODULE, maps:put(server, ?SERVER, CfgMap)}]}
+               {'_', [{"/", ?MODULE, CfgMap#{state => init}}]}
               ]),
 
         {ok, _} = cowboy:start_clear(
@@ -193,7 +198,7 @@ continue(State) ->
     catch
         _Etype:_Err:_Estack ->
             %% FIXME log error
-            io:format(">>> ~p:~p ERROR: ~p~n",[?MODULE,?LINE,{_Etype,_Err,_Estack}]),
+            ?dbg("<ERROR> ~p~n", [{_Etype,_Err,_Estack}]),
             {noreply, State}
     end.
 
@@ -212,53 +217,106 @@ consumer_config() ->
 init(Req0, StateMap) ->
     case cowboy_req:parse_header(<<"authorization">>, Req0, undefined) of
         undefined ->
-            io:format(">>> ~p got no authorization~n",[?MODULE]),
+            ?dbg("got no authorization header~n",[]),
             Req = cowboy_req:reply(401, Req0),
             {ok, Req, StateMap};
         Auth ->
-            Secret = maps:get(consumer_secret, StateMap),
-            case check_auth(Auth, Secret) of
-                true ->
-                    io:format(">>> ~p authenticate: SUCCESS~n",[?MODULE]),
-                    {cowboy_websocket, Req0, StateMap};
-                false ->
-                    io:format(">>> ~p authenticate: FAILED~n",[?MODULE]),
+            case get_challenge(Auth) of
+                {ok, Challenge} ->
+                    ?dbg("got Client Challenge: ~p~n", [Challenge]),
+                    {cowboy_websocket,
+                     Req0,
+                     StateMap#{state := client_challenge,
+                               client_challenge => Challenge}};
+                not_found ->
+                    ?dbg("failed, no Client challenge~n",[]),
                     Req = cowboy_req:reply(401, Req0),
                     {ok, Req, StateMap}
             end
     end.
 
-check_auth({bearer, Token}, Secret) ->
-    {ok, {Nonce, Digest}} = decode_token(Token),
-    verify_digest(Secret, Nonce, Digest);
-check_auth(_, _) ->
-    false.
+get_challenge({bearer, Challenge64}) ->
+    {ok, base64:decode(Challenge64)};
+get_challenge(_) ->
+    not_found.
+
 
 %%
 %% Cowboy Websocket callbacks
 %%
-websocket_init(State) ->
-    {[{text, <<"Consumer says Hello!">>}], State}.
+websocket_init(#{state := client_challenge,
+                 client_challenge := ClientChallenge,
+                 consumer_secret := Secret} = State) ->
+    %%
+    %% We got a Client Challenge, send back:
+    %%   -  the Client Digest
+    %%   -  our Server Challenge
+    %%
+    ClientDigest = digest(Secret, ClientChallenge),
+    ?dbg("mk Client Digest: ~p~n", [ClientDigest]),
 
-websocket_handle({binary,Bin}, State) ->
+    ServerChallenge = mk_challenge(),
+
+    ?dbg("send server challenge: ~p~n", [ServerChallenge]),
+
+    Reply = {server_challenge, ServerChallenge, ClientDigest},
+
+    {[{binary, erlang:term_to_binary(Reply)}],
+     State#{state := server_challenge,
+            server_challenge => ServerChallenge}}.
+
+
+%%
+%% Expecting client reply with server digest.
+%%
+websocket_handle({binary,Bin},
+                 #{state := server_challenge,
+                   consumer_secret := Secret,
+                   server_challenge := ServerChallenge} = State) ->
+    case erlang:binary_to_term(Bin) of
+        {digest, ServerDigest} ->
+            ?dbg("got client digest~n",[]),
+            case verify_digest(Secret, ServerChallenge, ServerDigest) of
+                true ->
+                    %% Ok, we are ready to receive data!
+                    {[{text,<<"welcome">>}], State#{state := running}};
+                false ->
+                    ?dbg("got wrong server digest : ~p~n", [ServerDigest]),
+                    {[{close, ?CC_1002_PROTO_ERROR, <<"wrong server digest">>}],
+                     State}
+            end;
+        _X ->
+            ?dbg("got no client digest : ~p~n", [_X]),
+            {[{close, ?CC_1002_PROTO_ERROR, <<"no server digest">>}],
+             State}
+    end;
+%%
+%% Expecting client data.
+%%
+websocket_handle({binary,Bin}, #{state := running} = State) ->
     case erlang:binary_to_term(Bin) of
         {produce, Type, Events} ->
-            io:format(">>> ~p storing: Type=~p~n",[?MODULE, Type]),
-            system_monitor_pg:produce(Type, Events);
+            ?dbg("storing: Type=~p~n", [Type]),
+            system_monitor_pg:produce(Type, Events),
+            {ok, State};
         _X ->
-            io:format(">>> ~p got wrong: ~p~n",[?MODULE, _X])
-    end,
-    {ok, State};
+            ?dbg("got wrong client data: ~p~n", [_X]),
+            {[{close, ?CC_1002_PROTO_ERROR, <<"wrong client data">>}],
+             State}
+    end;
 %%
-websocket_handle(Frame, State) ->
-    io:format(">>> ~p got frame: ~p~n",[?MODULE, Frame]),
-    {ok, State}.
+websocket_handle(_Frame, State) ->
+    ?dbg("got unknown frame: ~p~n",[_Frame]),
+    {[{close, ?CC_1002_PROTO_ERROR, <<"go away">>}], State}.
 
 
-websocket_info({log, Text}, State) ->
-    {[{text, Text}], State};
 websocket_info(_Info, State) ->
+    ?dbg("got unknown info: ~p~n",[_Info]),
     {ok, State}.
+
+
+mk_challenge() ->
+    system_monitor_consumer:nonce().
 
 %%--------------------------------------------------------------------
 %% @private

@@ -100,4 +100,32 @@ $ rebar3 shell --apps epgsql,ranch,cowboy
 2> system_monitor_consumer:start_link().
 ```
 
+## Authentication
+
+To authenticate the Consumer and Producer (Server/Client) a
+simple shared-secret/challenge/digest method is used.
+
+It works like this:
+
+1. The Client connects to the Server, providing a `client-challenge`
+   in the HTTP `Authorization` header.
+   
+2. The Server reply, via the upgraded Websocket, with a SHA512
+   digest made of the `client-challenge` + the `shared secret`
+   which it sends along together with a `server-challenge`.
+   
+3. The Client verifies that the returned `digest` is ok and replies
+   with a (new) SHA512 digest made of the `server-challenge` +
+   the `shared-secret`.
+   
+4. The Server verifies the received digest and sends a `welcome`
+   message back to the Client.
+   
+5. The Client can now start to send the collected BEAM data to
+   the Server
+   
+> __Note:__ The connection should of course run over TLS!
+> Despite all this, it does not protect against a Man-In-The-Middle attack!
+> (but what does?)
+
 
