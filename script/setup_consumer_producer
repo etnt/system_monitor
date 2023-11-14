@@ -8,8 +8,6 @@
 %%% * Modify the given "X.app" (or "X.app.src") file by setting
 %%%   any of the environment variable (env_vars/0) values.
 %%%
-%%% * Generate a consumer_secret unless it already exist in binary format.
-%%%
 %%% * Enable our Producer callback.
 %%%
 %%% * Disable auto start of any application.
@@ -18,12 +16,6 @@
 %%%
 %%% * Save a backup copy of the modified file.
 %%%
-%%% Usage:
-%%%
-%%%   setup_consumer_producer [-s] <path-to-system_monitor.app-file>
-%%%
-%%%     -s  ::=  silent, no output
-%%%
 %%% @end
 %%% --------------------------------------------------------------------
 
@@ -31,12 +23,21 @@ env_vars() ->
     [ "CONSUMER_ENABLE"
     , "CONSUMER_LISTEN_IP"
     , "CONSUMER_LISTEN_PORT"
+    , "CONSUMER_USE_TLS"
+    , "CONSUMER_CACERTFILE"
+    , "CONSUMER_CERTFILE"
+    , "CONSUMER_KEYFILE"
+    , "CONSUMER_CRLDIR"
     , "PRODUCER_ENABLE"
     , "PRODUCER_IP"
     , "PRODUCER_PORT"
+    , "PRODUCER_USE_TLS"
+    , "PRODUCER_CACERTFILE"
+    , "PRODUCER_CERTFILE"
     ].
 
 -define(dbg(FmtStr, Args), dbg(FmtStr, Args, ?LINE)).
+
 
 main(Args) ->
     try
@@ -44,7 +45,7 @@ main(Args) ->
         {ok,AppData} = file:consult(AppFile),
         EnvMap = get_env(ArgsMap),
         NewAppData = massage_app_data(AppData, EnvMap),
-        save_file(AppFile, hd(NewAppData)),
+        save_file(AppFile, erlang:hd(NewAppData)),
         halt(0)
     catch
         throw:no_app_file ->
@@ -73,7 +74,8 @@ usage() ->
 
 parse_args(Args) ->
     put(silent, false),
-    case do_parse_args(Args, #{}) of
+    InitMap = init_map(),
+    case do_parse_args(Args, InitMap) of
         #{enable_consumer_only := true,
           enable_producer_only := true} ->
             throw(both_only);
@@ -97,9 +99,22 @@ do_parse_args([PathToAppFile], Map) ->
 do_parse_args([], _) ->
     throw(no_app_file).
 
+init_map() ->
+    #{}.
 
-foldf(Db, Funs) ->
-    lists:foldl(fun(F, Acc) -> F(Acc) end, Db, Funs).
+
+ foldf(Db, Funs) ->
+     lists:foldl(fun(F, Acc) -> F(Acc) end, Db, Funs).
+
+our_dependencies(#{enable_consumer_only := true}) ->
+     [cowlib,ranch,cowboy];
+ our_dependencies(#{enable_producer_only := true}) ->
+     [cowlib,gun];
+ our_dependencies(_) ->
+     our_dependencies().
+
+ our_dependencies() ->
+     [cowlib,ranch,cowboy,gun].
 
 fix_dependencies_f(EnvMap) ->
     fun(D) ->
@@ -120,15 +135,6 @@ fix_dependencies_f(EnvMap) ->
             lists:keyreplace(applications, 1, D, {applications, Apps})
     end.
 
-our_dependencies(#{enable_consumer_only := true}) ->
-    [cowlib,ranch,cowboy];
-our_dependencies(#{enable_producer_only := true}) ->
-    [cowlib,gun];
-our_dependencies(_) ->
-    our_dependencies().
-
-our_dependencies() ->
-    [cowlib,ranch,cowboy,gun].
 
 %% Remove the 'mod', i.e disable auto start of any application.
 rm_mod_f() ->
@@ -147,22 +153,6 @@ maybe_enable_producer_callback_f(_EnvMap) ->
     id_f().
 
 
-%% A new Secret is only generated when missing from 'env'
-%% (i.e we will not overwrite an existing Secret).
-maybe_generate_secret_f() ->
-    fun(D) ->
-            Key = consumer_secret,
-            case lists:keyfind(Key, 1, D) of
-                {Key, Bin} when is_binary(Bin) ->
-                    %% Don't overwrite an existing Secret
-                    D;
-                _ ->
-                    log("<INFO> new secret generated~n",[]),
-                    Secret = mk_secret(),
-                    lists:keyreplace(Key, 1, D, {Key,Secret})
-            end
-    end.
-
 id_f() -> fun(D) -> D end.
 
 
@@ -176,14 +166,13 @@ massage_app_data([{application, system_monitor, Data}], EnvMap) ->
           ]
          ),
 
-    {env, Env} = lists:keyfind(env, 1, Data0),
+     {env, Env} = lists:keyfind(env, 1, Data0),
 
     ?dbg("massage_app_data~n",[]),
     Env0 =
         foldf(
           Env,
           [ maybe_enable_producer_callback_f(EnvMap)
-          , maybe_generate_secret_f()
           ]
          ),
 
@@ -209,10 +198,42 @@ massage_app_data([{application, system_monitor, Data}], EnvMap) ->
 
 replace(consumer_enable = Key, _Val, Acc, #{enable_producer_only := true}) ->
     lists:keyreplace(Key, 1, Acc, {Key, false});
+%%
 replace(producer_enable = Key, _Val, Acc, #{enable_consumer_only := true}) ->
     lists:keyreplace(Key, 1, Acc, {Key, false});
+%%
+replace(consumer_cacertfile, Val, Acc, EnvMap) ->
+    replace_in(consumer_tls_opts, cacertfile, Val, Acc, EnvMap);
+%%
+replace(consumer_certfile, Val, Acc, EnvMap) ->
+    replace_in(consumer_tls_opts, certfile, Val, Acc, EnvMap);
+%%
+replace(consumer_keyfile, Val, Acc, EnvMap) ->
+    replace_in(consumer_tls_opts, keyfile, Val, Acc, EnvMap);
+%%
+replace(consumer_crldir, Val, Acc, EnvMap) ->
+    CRL_cacheVal = {ssl_crl_hash_dir, {internal, [{dir, Val}]}},
+    replace_in(consumer_tls_opts, crl_cache, CRL_cacheVal, Acc, EnvMap);
+%%
+replace(producer_cacertfile, Val, Acc, EnvMap) ->
+    replace_in(producer_tls_opts, cacertfile, Val, Acc, EnvMap);
+%%
+replace(producer_certfile, Val, Acc, EnvMap) ->
+    replace_in(producer_tls_opts, certfile, Val, Acc, EnvMap);
+%%
 replace(Key, Val, Acc, _EnvMap) ->
     lists:keyreplace(Key, 1, Acc, {Key, Val}).
+
+
+replace_in(OuterKey, InnerKey, Val, Acc, _EnvMap) ->
+    case lists:keyfind(OuterKey, 1, Acc) of
+        {OuterKey, L} ->
+            L2 = lists:keyreplace(InnerKey, 1, L, {InnerKey, Val}),
+            lists:keyreplace(OuterKey, 1, Acc, {OuterKey, L2});
+        _ ->
+            Acc
+    end.
+
 
 
 %% Read any relevant environment variables and store them in a Map.
@@ -243,26 +264,37 @@ convert(consumer_listen_ip, Val) ->
     IP;
 convert(consumer_listen_port, Val) ->
     erlang:list_to_integer(Val);
+convert(consumer_use_tls, Val) ->
+    erlang:list_to_atom(Val);
+convert(consumer_cacertfile, Val) ->
+    Val;
+convert(consumer_certfile, Val) ->
+    Val;
+convert(consumer_keyfile, Val) ->
+    Val;
+convert(consumer_crldir, Val) ->
+    Val;
+%%
 convert(producer_enable, Val) ->
     erlang:list_to_atom(Val);
 convert(producer_ip, Val) ->
     {ok, IP} = inet:parse_address(Val),
     IP;
 convert(producer_port, Val) ->
-    erlang:list_to_integer(Val).
+    erlang:list_to_integer(Val);
+convert(producer_use_tls, Val) ->
+    erlang:list_to_atom(Val);
+convert(producer_cacertfile, Val) ->
+    Val;
+convert(producer_certfile, Val) ->
+    Val.
+
 
 get_env_var(EVar) ->
     case os:getenv(EVar) of
         false -> false;
         X     -> {ok,X}
     end.
-
-
-
-
-mk_secret() ->
-    Bytes = crypto:strong_rand_bytes(21),
-    base64:encode(Bytes).
 
 
 log(FmtStr, Args) ->

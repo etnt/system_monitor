@@ -1,3 +1,5 @@
+include consumer_producer.mk
+
 PICS=$(patsubst %.uml,%.png,$(wildcard doc/*.uml))
 
 .PHONY: test

@@ -31,12 +31,7 @@
         , websocket_info/2
         ]).
 
--export([ get_config/1
-        , nonce/0
-        , digest/2
-        , verify_digest/3
-        , encode_token/2
-        , decode_token/1
+-export([ get_config/2
         ]).
 
 -include_lib("system_monitor/include/system_monitor.hrl").
@@ -45,18 +40,10 @@
 -define(dbg(FmtStr, Args), io:format("~p~p: "++FmtStr,[?MODULE,?LINE|Args])).
 
 -define(SERVER, ?MODULE).
--define(FIVE_SECONDS, 5000).
--define(ONE_HOUR, 60*60*1000).
 
 %% Close codes, see: RFC-6455 section: 7.4
 -define(CC_1000_NORMAL, 1000).
 -define(CC_1002_PROTO_ERROR, 1002).
--record(state,
-        { conn_pid
-        , stream_ref
-        , pg_pid
-        , cfg_map
-        }).
 
 %%%===================================================================
 %%% API
@@ -64,60 +51,18 @@
 
 %% @doc Get the relevant Application config
 %%
-%% Get the relevant Application config and make it possible
-%% to override it through Envirionment Variables.
-%%
 %% @end
--spec(get_config([Key :: atom()]) -> map()).
-
-get_config(Keys) ->
-    %% First get the application config
-    CfgMap =
-        lists:foldl(
-          fun(Key, Map) ->
-                  case application:get_env(system_monitor, Key) of
-                      {ok, Val} ->
-                          maps:put(Key, Val, Map);
-                      _ ->
-                          throw({missing_config, Key})
-                  end
-          end, #{}, Keys),
-
-    %% Make it possible to override config through Env.Vars
+-spec(get_config([Key :: atom()], Map :: map()) -> map()).
+get_config(Keys, CfgMap) ->
     lists:foldl(
       fun(Key, Map) ->
-              case get_env_config(Key) of
+              case application:get_env(system_monitor, Key) of
                   {ok, Val} ->
                       maps:put(Key, Val, Map);
                   _ ->
-                      Map
+                      throw({missing_config, Key})
               end
       end, CfgMap, Keys).
-
-
-get_env_config(Key) when is_atom(Key) ->
-    case os:getenv(string:uppercase(erlang:atom_to_list(Key))) of
-        false -> false;
-        Val   -> env_convert(Key, Val)
-    end.
-
-
-env_convert(consumer_enable, Val) ->
-    erlang:list_to_atom(Val);
-env_convert(consumer_listen_ip, Val) ->
-    {ok, IP} = inet:parse_address(Val),
-    IP;
-env_convert(consumer_listen_port, Val) ->
-    erlang:list_to_integer(Val);
-env_convert(consumer_secret, Secret) ->
-    erlang:list_to_binary(Secret);
-env_convert(producer_enable, Val) ->
-    erlang:list_to_atom(Val);
-env_convert(producer_ip, Val) ->
-    {ok, IP} = inet:parse_address(Val),
-    IP;
-env_convert(producer_port, Val) ->
-    erlang:list_to_integer(Val).
 
 
 %%--------------------------------------------------------------------
@@ -149,22 +94,25 @@ start_link() ->
           ignore.
 init([]) ->
     process_flag(trap_exit, true),
-    {ok, #state{}, {continue, start_consumer}}.
+    {ok, #{}, {continue, start_consumer}}.
 
 
-handle_continue(start_consumer, State) ->
+handle_continue(start_consumer, CfgMap) ->
+    continue(get_consumer_config(CfgMap)).
+
+continue(CfgMap) ->
     case start_pg() of
         {ok, PgPid} ->
-            CfgMap = get_consumer_config(),
             case maps:get(consumer_enable, CfgMap, false) of
-                true -> continue(State#state{pg_pid  = PgPid,
-                                             cfg_map = CfgMap});
-                _    -> {stop, {error, "consumer is disabled"}, State}
+                true -> proceed(CfgMap#{pg_pid => PgPid,
+                                        cfg_map => CfgMap});
+                _    -> {stop, {error, "consumer is disabled"}, CfgMap}
             end;
         _ ->
-            {stop, {error, "failed to start pg"}, State}
+            {stop, {error, "failed to start pg"}, CfgMap}
     end.
 
+%% Start Postgres backend
 start_pg() ->
     case system_monitor_pg:start_link() of
         {ok, _Pid} = X                  -> X;
@@ -173,41 +121,62 @@ start_pg() ->
     end.
 
 
-continue(State) ->
+proceed(CfgMap) ->
     try
-        CfgMap = State#state.cfg_map,
-        IP = maps:get(consumer_listen_ip, CfgMap),
-        Port = maps:get(consumer_listen_port, CfgMap),
-
         Dispatch =
             cowboy_router:compile(
               [
                %% {HostMatch, list({PathMatch, Handler, InitialState})}
-               {'_', [{"/", ?MODULE, CfgMap#{state => init}}]}
+               {'_', [{"/", ?MODULE, CfgMap}]}
               ]),
 
-        {ok, _} = cowboy:start_clear(
-                    consumer_http_listener,
-                    [{ip, IP},
-                     {port, Port}],
-                    #{env => #{dispatch => Dispatch}}
-                   ),
+        {ok,_} = start_listener(CfgMap, Dispatch),
 
-        {noreply, State}
+        {noreply, CfgMap}
 
     catch
         _Etype:_Err:_Estack ->
             %% FIXME log error
             ?dbg("<ERROR> ~p~n", [{_Etype,_Err,_Estack}]),
-            {noreply, State}
+            {noreply, CfgMap}
     end.
 
 
-get_consumer_config() ->
-    get_config(consumer_config()).
+start_listener(#{consumer_use_tls := true} = CfgMap, Dispatch) ->
+    IP = maps:get(consumer_listen_ip, CfgMap),
+    Port = maps:get(consumer_listen_port, CfgMap),
+    TLS_opts = maps:get(consumer_tls_opts, CfgMap),
+
+    Opts = [ {ip, IP}
+           , {port, Port}
+           ] ++ TLS_opts,
+
+    ?dbg("starting HTTPS listener on Port: ~p , TLS_opts = ~p~n",[Port,TLS_opts]),
+    cowboy:start_tls(consumer_tls_listener,
+                     Opts,
+                     #{env => #{dispatch => Dispatch}}
+     );
+%%
+start_listener(CfgMap, Dispatch) ->
+    IP = maps:get(consumer_listen_ip, CfgMap),
+    Port = maps:get(consumer_listen_port, CfgMap),
+
+    ?dbg("starting HTTP listener on Port: ~p~n",[Port]),
+    cowboy:start_clear(
+      consumer_tcp_listener,
+      [ {ip, IP}
+      , {port, Port}
+      ],
+      #{env => #{dispatch => Dispatch}}
+     ).
+
+
+get_consumer_config(CfgMap) ->
+    get_config(consumer_config(), CfgMap).
 
 consumer_config() ->
-    [consumer_enable,consumer_listen_ip,consumer_listen_port,consumer_secret].
+    [consumer_enable, consumer_listen_ip, consumer_listen_port,
+     consumer_use_tls, consumer_tls_opts].
 
 
 
@@ -215,108 +184,42 @@ consumer_config() ->
 %% Cowboy callback
 %%
 init(Req0, StateMap) ->
-    case cowboy_req:parse_header(<<"authorization">>, Req0, undefined) of
-        undefined ->
-            ?dbg("got no authorization header~n",[]),
-            Req = cowboy_req:reply(401, Req0),
-            {ok, Req, StateMap};
-        Auth ->
-            case get_challenge(Auth) of
-                {ok, Challenge} ->
-                    ?dbg("got Client Challenge: ~p~n", [Challenge]),
-                    {cowboy_websocket,
-                     Req0,
-                     StateMap#{state := client_challenge,
-                               client_challenge => Challenge}};
-                not_found ->
-                    ?dbg("failed, no Client challenge~n",[]),
-                    Req = cowboy_req:reply(401, Req0),
-                    {ok, Req, StateMap}
-            end
-    end.
-
-get_challenge({bearer, Challenge64}) ->
-    {ok, base64:decode(Challenge64)};
-get_challenge(_) ->
-    not_found.
-
+    ?dbg("server got connected, upgrading to Websocket!~n", []),
+    {cowboy_websocket,
+     Req0,
+     StateMap}.
 
 %%
 %% Cowboy Websocket callbacks
 %%
-websocket_init(#{state := client_challenge,
-                 client_challenge := ClientChallenge,
-                 consumer_secret := Secret} = State) ->
-    %%
-    %% We got a Client Challenge, send back:
-    %%   -  the Client Digest
-    %%   -  our Server Challenge
-    %%
-    ClientDigest = digest(Secret, ClientChallenge),
-    ?dbg("mk Client Digest: ~p~n", [ClientDigest]),
-
-    ServerChallenge = mk_challenge(),
-
-    ?dbg("send server challenge: ~p~n", [ServerChallenge]),
-
-    Reply = {server_challenge, ServerChallenge, ClientDigest},
-
-    {[{binary, erlang:term_to_binary(Reply)}],
-     State#{state := server_challenge,
-            server_challenge => ServerChallenge}}.
+websocket_init(StateMap) ->
+    ?dbg("server websocket init, sending Welcome!~n",[]),
+    {[{text,"Welcome to the gunsmoke server!"}], StateMap}.
 
 
-%%
-%% Expecting client reply with server digest.
-%%
-websocket_handle({binary,Bin},
-                 #{state := server_challenge,
-                   consumer_secret := Secret,
-                   server_challenge := ServerChallenge} = State) ->
-    case erlang:binary_to_term(Bin) of
-        {digest, ServerDigest} ->
-            ?dbg("got client digest~n",[]),
-            case verify_digest(Secret, ServerChallenge, ServerDigest) of
-                true ->
-                    %% Ok, we are ready to receive data!
-                    {[{text,<<"welcome">>}], State#{state := running}};
-                false ->
-                    ?dbg("got wrong server digest : ~p~n", [ServerDigest]),
-                    {[{close, ?CC_1002_PROTO_ERROR, <<"wrong server digest">>}],
-                     State}
-            end;
-        _X ->
-            ?dbg("got no client digest : ~p~n", [_X]),
-            {[{close, ?CC_1002_PROTO_ERROR, <<"no server digest">>}],
-             State}
-    end;
 %%
 %% Expecting client data.
 %%
-websocket_handle({binary,Bin}, #{state := running} = State) ->
+websocket_handle({binary,Bin}, StateMap) ->
     case erlang:binary_to_term(Bin) of
         {produce, Type, Events} ->
             ?dbg("storing: Type=~p~n", [Type]),
             system_monitor_pg:produce(Type, Events),
-            {ok, State};
+            {ok, StateMap};
         _X ->
             ?dbg("got wrong client data: ~p~n", [_X]),
             {[{close, ?CC_1002_PROTO_ERROR, <<"wrong client data">>}],
-             State}
+             StateMap}
     end;
 %%
-websocket_handle(_Frame, State) ->
+websocket_handle(_Frame, StateMap) ->
     ?dbg("got unknown frame: ~p~n",[_Frame]),
-    {[{close, ?CC_1002_PROTO_ERROR, <<"go away">>}], State}.
+    {[{close, ?CC_1002_PROTO_ERROR, <<"go away">>}], StateMap}.
 
 
-websocket_info(_Info, State) ->
+websocket_info(_Info, StateMap) ->
     ?dbg("got unknown info: ~p~n",[_Info]),
-    {ok, State}.
-
-
-mk_challenge() ->
-    system_monitor_consumer:nonce().
+    {ok, StateMap}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -415,46 +318,3 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 
-%%
-%% Simple digest token creation
-%%
--define(NONCE_LEN, 21).
-
-nonce() ->
-    crypto:strong_rand_bytes(?NONCE_LEN).
-
-digest(Secret, Nonce) ->
-    crypto:mac(hmac, sha512, Secret, Nonce).
-
-verify_digest(Secret, Nonce, Digest) ->
-    case crypto:mac(hmac, sha512, Secret, Nonce) of
-        Digest -> true;
-        _      -> false
-    end.
-
-encode_token(Nonce, Digest) ->
-    base64:encode(<<Nonce/binary,Digest/binary>>).
-
-decode_token(Token) ->
-    case base64:decode(Token) of
-        <<Nonce:?NONCE_LEN/binary,Digest/binary>> ->
-            {ok, {Nonce, Digest}};
-        _ ->
-            {error, decode_token}
-    end.
-
--ifdef(EUNIT).
-
-digest_test_() ->
-    Secret = <<"my-secret-key">>,
-    Secret2 = <<"my-secret-key2">>,
-    Nonce = nonce(),
-    Digest = digest(Secret, Nonce),
-    Token = encode_token(Nonce, Digest),
-
-    {ok, {Nonce2, Digest2}} = decode_token(Token),
-
-    [?_assertMatch(true, verify_digest(Secret, Nonce2, Digest2)),
-     ?_assertMatch(false, verify_digest(Secret2, Nonce2, Digest2))].
-
--endif.
