@@ -81,13 +81,24 @@ init(?SUP2) ->
           [ worker(system_monitor_top)
           , worker(system_monitor_events)
           , worker(system_monitor)
-          ] ++ producer_callback()
+          ]
+          ++ producer_callback()
+          ++ custom_metric_collectors()
          }}.
 
 producer_callback() ->
     case system_monitor_callback:get_callback_mod() of
       undefined -> [];
       Mod -> [worker(Mod)]
+    end.
+
+custom_metric_collectors() ->
+    case application:get_env(system_monitor, custom_metrics) of
+        {ok, CMs} ->
+            %% A custom metric module can produce several type of events!
+            [worker(CallbackMod) || CallbackMod <- system_monitor:uniq(CMs)];
+        _ ->
+            []
     end.
 
 get_restart_intensity() ->

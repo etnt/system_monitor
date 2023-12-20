@@ -39,6 +39,7 @@
         , stop_top/0
         , fmt_mfa/1
         , fmt_stack/1
+        , uniq/1
         ]).
 
 %% gen_server callbacks
@@ -152,6 +153,7 @@ init_monitors() ->
 -spec monitors() -> [{module(), function(), boolean(), pos_integer()}].
 monitors() ->
   {ok, AdditionalMonitors} = application:get_env(system_monitor, status_checks),
+  CustomMetrics = get_custom_metrics(),
   MaybeReportFullStatusMonitor =
     case system_monitor_callback:is_configured() of
       true ->
@@ -163,7 +165,35 @@ monitors() ->
   [{?MODULE, check_process_count, true, 2},
    {?MODULE, suspect_procs, true, 5}]
   ++ MaybeReportFullStatusMonitor
-  ++ AdditionalMonitors.
+  ++ AdditionalMonitors
+  ++ CustomMetrics.
+
+
+get_custom_metrics() ->
+    case system_monitor_callback:is_configured() of
+      true ->
+            case application:get_env(system_monitor, custom_metrics) of
+                {ok, CMs} ->
+                    [CallbackMod:monitor() || CallbackMod <- uniq(CMs)];
+                _ ->
+                    []
+            end;
+        _ ->
+            []
+  end.
+
+uniq(CMs) -> uniq(CMs, []).
+
+uniq([], Uniq) ->
+    Uniq;
+uniq([{_,CM}|CMs], Uniq) ->
+    uniq(CMs, uniq_insert(CM, Uniq)).
+
+uniq_insert(X, [X|_] = L) -> L;
+uniq_insert(X, [])        -> [X];
+uniq_insert(X, [H|T])     -> [H|uniq_insert(X,T)].
+
+
 
 %%------------------------------------------------------------------------------
 %% Monitor for number of processes

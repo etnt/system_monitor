@@ -205,7 +205,7 @@ websocket_init(StateMap) ->
 websocket_handle({binary,Bin}, StateMap) ->
     case erlang:binary_to_term(Bin) of
         {produce, Type, Events} ->
-            ?dbg("storing: Type=~p~n", [Type]),
+            ?dbg("storing: Type=~p , Events=~p~n", [Type,Events]),
             system_monitor_pg:produce(Type, Events),
             {ok, StateMap};
         _X ->

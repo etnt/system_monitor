@@ -29,6 +29,8 @@
 -behaviour(system_monitor_callback).
 -export([ produce/2 ]).
 
+-export([ ts_to_timestamp/1 ]).
+
 -include_lib("system_monitor/include/system_monitor.hrl").
 -include_lib("kernel/include/logger.hrl").
 
@@ -49,6 +51,8 @@ init(_Args) ->
   {ok, #{}, {continue, start_pg}}.
 
 handle_continue(start_pg, State) ->
+  CM = application:get_env(system_monitor, custom_metrics, []),
+  put(custom_metrics, CM),
   Conn = initialize(),
   case Conn of
     undefined ->
@@ -172,7 +176,7 @@ mk_partitions(Conn) ->
   lists:foreach(fun(Day) -> delete_partition_tables(Conn, Day) end, DaysBehindL).
 
 create_partition_tables(Conn, Day) ->
-  Tables = [<<"prc">>, <<"app_top">>, <<"fun_top">>, <<"node_role">>],
+  Tables = tables(),
   From = to_postgres_date(Day),
   To = to_postgres_date(Day + 1),
   lists:foreach(fun(Table) ->
@@ -182,12 +186,20 @@ create_partition_tables(Conn, Day) ->
                 Tables).
 
 delete_partition_tables(Conn, Day) ->
-  Tables = [<<"prc">>, <<"app_top">>, <<"fun_top">>, <<"node_role">>],
+  Tables = tables(),
   lists:foreach(fun(Table) ->
                    Query = delete_partition_query(Table, Day),
                    {ok, [], []} = epgsql:squery(Conn, Query)
                 end,
                 Tables).
+
+tables() ->
+  [<<"prc">>, <<"app_top">>, <<"fun_top">>, <<"node_role">>
+  | custom_metrics_tables(get(custom_metrics))].
+
+custom_metrics_tables(CustomMetricsPG) ->
+  [Module:table(Type) || {Type, Module} <- CustomMetricsPG].
+
 
 create_partition_query(Table, Day, From, To) ->
   <<"CREATE TABLE IF NOT EXISTS ", Table/binary, "_", (integer_to_binary(Day))/binary, " ",
@@ -212,7 +224,14 @@ query(app_top) ->
 query(node_role) ->
   node_role_query();
 query(proc_top) ->
-  prc_query().
+  prc_query();
+query(Type) ->
+  custom_metrics_query(Type, get(custom_metrics)).
+
+custom_metrics_query(Type, CustomMetricsPG) ->
+  {Type, Module} = lists:keyfind(Type, 1, CustomMetricsPG),
+  Module:query(Type).
+
 
 prc_query() ->
   <<"insert into prc (node, ts, pid, dreductions, dmemory, reductions, "
@@ -272,7 +291,14 @@ params(proc_top,
    HS,
    THS,
    system_monitor:fmt_stack(CS),
-   GL].
+   GL];
+params(Type, Event) ->
+    custom_metrics_param(Type, Event, get(custom_metrics)).
+
+custom_metrics_param(Type, Event, CustomMetricsPG) ->
+  {Type, Module} = lists:keyfind(Type, 1, CustomMetricsPG),
+  Module:params(Type, Event).
+
 
 ts_to_timestamp(TS) ->
   calendar:system_time_to_universal_time(TS, native).

@@ -28,8 +28,8 @@
 -include_lib("system_monitor/include/system_monitor.hrl").
 -include_lib("kernel/include/logger.hrl").
 
--define(dbg(FmtStr, Args), ok).
-%%-define(dbg(FmtStr, Args), io:format("~p~p: "++FmtStr,[?MODULE,?LINE|Args])).
+%%-define(dbg(FmtStr, Args), ok).
+-define(dbg(FmtStr, Args), io:format("~p~p: "++FmtStr,[?MODULE,?LINE|Args])).
 
 -define(SERVER, ?MODULE).
 

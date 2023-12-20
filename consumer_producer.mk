@@ -14,4 +14,4 @@ consumer:
 
 # Start the Producer node
 producer:
-	rebar3 shell --apps gun --eval 'application:load(system_monitor),system_monitor_sup:start_link().'
+	rebar3 shell --apps ssl,cowlib,gun --eval 'application:load(system_monitor),system_monitor_sup:start_link().'
