@@ -62,8 +62,47 @@
       %% function()}', for example: `{my_app, node_status}'. This
       %% function should return an HTML-formatted status report:
     , {node_status_fun, undefined}
-      %% List of additional status check functions:
+      %% List of additional status check functions, list of:
+      %% {Module, Function, RunMonitorAtTerminate, NumberOfTicks}
     , {status_checks, []}
+
+      %% Callback module, assumed to export a
+      %% system_monitor_event(EventKind,Info) function;
+      %% this function will be invoked whenever a BEAM event occur.
+    , {external_monitoring, undefined}
+
+      %% Set to Module that export a produce(Type,Event) function.
+      %% Typically set to 'system_monitor_pg' to enable export
+      %% of collected metrics to Postgres.
+    , {callback_mod, undefined}
+
+      %% custom_metrics - Callback hook for adding custom metrics.
+      %%
+      %% Should contain a list of: {Type :: atom(), Module :: atom()}
+      %% where Type is the first argument to the
+      %% system_monitor_callback:produce/2 function (where Events
+      %% is the second argument).
+      %%
+      %% Module is a gen_server with functions for dealing with custom metrics.
+      %% The gen_server will be started by the system_monitor supervisor.
+      %% The Module must export the following functions,
+      %% which should return as described below:
+      %%
+      %%   monitor() => {Module,Function,RunMonitorAtTerminate,NumberOfTicks}
+      %%   query(Type) => SQL insert expression as a binary.
+      %%   params(Type, Event) => A list of values to be inserted.
+      %%   table(Type) => Postgres table name as a binary.
+      %%
+      %% Function is the function that will be invoked every NumberOfTicks
+      %% second; it is supposed to collect the metric and invoke the
+      %% system_monitor_callback:produce/2
+      %%
+      %% Event is a member of the Events list (see above).
+      %%
+      %% Note: Requires that `callback_mod` is set to take effect!
+      %%
+    , {custom_metrics,
+       [{memory, system_monitor_memory_metric}]}
 
       %% BEAM event settings:
     , {beam_events,

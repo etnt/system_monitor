@@ -152,6 +152,7 @@ init_monitors() ->
 -spec monitors() -> [{module(), function(), boolean(), pos_integer()}].
 monitors() ->
   {ok, AdditionalMonitors} = application:get_env(system_monitor, status_checks),
+  CustomMetrics = get_custom_metrics(),
   MaybeReportFullStatusMonitor =
     case system_monitor_callback:is_configured() of
       true ->
@@ -163,7 +164,23 @@ monitors() ->
   [{?MODULE, check_process_count, true, 2},
    {?MODULE, suspect_procs, true, 5}]
   ++ MaybeReportFullStatusMonitor
-  ++ AdditionalMonitors.
+  ++ AdditionalMonitors
+  ++ CustomMetrics.
+
+
+get_custom_metrics() ->
+    case system_monitor_callback:is_configured() of
+      true ->
+            case application:get_env(system_monitor, custom_metrics) of
+                {ok, CMs} ->
+                    [CallbackMod:monitor() || {_Type, CallbackMod} <- CMs];
+                _ ->
+                    []
+            end;
+        _ ->
+            []
+  end.
+
 
 %%------------------------------------------------------------------------------
 %% Monitor for number of processes
