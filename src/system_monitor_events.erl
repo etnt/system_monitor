@@ -67,7 +67,7 @@ handle_info({monitor, PidOrPort, EventKind, Info}, State) ->
       ),
   case application:get_env(?APP, external_monitoring, undefined) of
     undefined -> ok;
-    Mod -> Mod:system_monitor_event(EventKind, Info)
+    Mod -> system_monitor_event(Mod, PidOrPort, EventKind, Info)
   end,
   {noreply, State};
 handle_info(_Info, State) ->
@@ -79,6 +79,17 @@ terminate(_Reason, _State) ->
 %%==============================================================================
 %% Internal functions
 %%==============================================================================
+
+%% The Mod:system_monitor_event/3 is a non-backwards compatible addition.
+%% So if calling this function fail, we will call the original:
+%% Mod:system_monitor_event/2 function.
+system_monitor_event(Mod, PidOrPort, EventKind, Info) ->
+  try
+    Mod:system_monitor_event(PidOrPort, EventKind, Info)
+  catch
+    _:_ ->
+      Mod:system_monitor_event(EventKind, Info)
+  end.
 
 %%--------------------------------------------------------------------
 %% @doc: Set the current process as the receiver of the BEAM system

@@ -67,7 +67,7 @@
     , {status_checks, []}
 
       %% Callback module, assumed to export a
-      %% system_monitor_event(EventKind,Info) function;
+      %% system_monitor_event(PidOrPort,EventKind,Info) function;
       %% this function will be invoked whenever a BEAM event occur.
     , {external_monitoring, undefined}
 
