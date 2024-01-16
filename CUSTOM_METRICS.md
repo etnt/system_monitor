@@ -127,7 +127,7 @@ $ ./40-memory.sh localhost
 
 ## Create a Grafana Dashboard
 
-You will find a dasboard for Grafana of the metrics here:
+You will find a dashboard for Grafana of the metrics here:
 `docker/grafana/dashboards/memory.json`.
 
 
