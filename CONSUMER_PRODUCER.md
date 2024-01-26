@@ -47,6 +47,11 @@ sudo docker start docker-db-1
 sudo docker start docker-grafana-1
 ```
 
+### Setup the Certificates
+
+>[!NOTE]
+> This it not necessary if running over TCP only!
+
 To create the necessary server- and client certificates we will make use
 of the [myca](https://github.com/etnt/myca) package. 
 
@@ -68,6 +73,8 @@ client_keys/bill@acme.com_Tue-21-Nov-2023-01:14:32-PM-CET.pem
 certs/cacert.pem
 ```
 
+### Prepare the .app file
+
 By default the Consumer-Producer functionality is turned off.
 The configuration is available but disabled in the
 `src/system_monitor.app.src` file where it also is documented.
@@ -80,6 +87,12 @@ the file path leading to the `system_monitor.app` file which will
 be modified inline. It looks for any corresponding environment
 variables and, when found, makes the changes.
 
+>[!NOTE]
+> If using `rebar3 shell`, which will automatically  recompile the application,
+> it can be necessary to operate on the `./src/system_monitor.app.src`
+> file instead to having your `system_monitor.app` file being overwritten.
+
+
 The setup of the environment variables and invoking the
 script can be done as show below:
 
@@ -88,10 +101,10 @@ $ set -a
 $ . ./config/consumer.env
 $ set +a
 $ ./script/setup_consumer_producer -c ./_build/default/lib/system_monitor/ebin/system_monitor.app
+
+# Or do like this, see the Note above!
+$ ./script/setup_consumer_producer -c ./src/system_monitor.app.src
 ```
-> __Note:__ if using `rebar3 shell`, which will recompile the application,
-> it can be necessary to operate on the `./src/system_monitor.app.src`
-> file instead to avoid overwriting the `system_monitor.app` file.
 
 To tailor the resulting app file for either the Consumer or the Producer,
 use either of the `-c` or `-p` flags to the script.
@@ -143,6 +156,9 @@ $ set -a
 $ . ./config/producer.env
 $ set +a
 $ ./script/setup_consumer_producer -p ./_build/default/lib/system_monitor/ebin/system_monitor.app
+
+# Or do like this, see the Note above!
+$ ./script/setup_consumer_producer -p ./src/system_monitor.app.src
 ```
 
 
@@ -171,7 +187,7 @@ start_system_monitor() ->
     ok = application:set_env(system_monitor, producer_enable, true),
     ok = application:set_env(system_monitor, callback_mod, system_monitor_producer),
     ok = application:set_env(system_monitor, restart_intensity, {5,60}),
-    %% You can of course also set the Host/IP and CaCertFile/CertFile info here,
+    %% You can of course also set the Host/IP, CaCertFile/CertFile and TLS info here,
     %% using application:set_env/3, if that is more convenient for you.
     ChildSpec = my_system_monitor_sup:system_monitor_child(),
     supervisor:start_child(my_system_monitor_sup, ChildSpec).
