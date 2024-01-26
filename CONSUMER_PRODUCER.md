@@ -90,7 +90,8 @@ variables and, when found, makes the changes.
 >[!NOTE]
 > If using `rebar3 shell`, which will automatically  recompile the application,
 > it can be necessary to operate on the `./src/system_monitor.app.src`
-> file instead to having your `system_monitor.app` file being overwritten.
+> file instead of having your `system_monitor.app` file being overwritten
+> when compiling.
 
 
 The setup of the environment variables and invoking the
