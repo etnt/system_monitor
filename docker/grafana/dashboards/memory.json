@@ -1,41 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_POSTGRES",
-      "label": "Postgres",
-      "description": "",
-      "type": "datasource",
-      "pluginId": "postgres",
-      "pluginName": "PostgreSQL"
-    }
-  ],
-  "__elements": {},
-  "__requires": [
-    {
-      "type": "panel",
-      "id": "gauge",
-      "name": "Gauge",
-      "version": ""
-    },
-    {
-      "type": "grafana",
-      "id": "grafana",
-      "name": "Grafana",
-      "version": "10.2.2"
-    },
-    {
-      "type": "datasource",
-      "id": "postgres",
-      "name": "PostgreSQL",
-      "version": "1.0.0"
-    },
-    {
-      "type": "panel",
-      "id": "timeseries",
-      "name": "Time series",
-      "version": ""
-    }
-  ],
   "annotations": {
     "list": [
       {
@@ -60,10 +23,7 @@
   "liveNow": false,
   "panels": [
     {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_POSTGRES}"
-      },
+      "datasource": "Postgres",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -113,10 +73,7 @@
       "pluginVersion": "10.2.2",
       "targets": [
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "builder",
           "format": "table",
           "rawSql": "SELECT total FROM memory LIMIT 50 ",
@@ -146,10 +103,7 @@
           "table": "memory"
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "hide": false,
           "refId": "B"
         }
@@ -158,10 +112,7 @@
       "type": "gauge"
     },
     {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_POSTGRES}"
-      },
+      "datasource": "Postgres",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -211,10 +162,7 @@
       "pluginVersion": "10.2.2",
       "targets": [
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "builder",
           "format": "table",
           "hide": false,
@@ -245,10 +193,7 @@
           "table": "memory"
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "hide": false,
           "refId": "C"
         }
@@ -257,10 +202,7 @@
       "type": "gauge"
     },
     {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_POSTGRES}"
-      },
+      "datasource": "Postgres",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -338,10 +280,7 @@
       "pluginVersion": "10.2.2",
       "targets": [
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -373,10 +312,7 @@
           "table": "ertsalloc"
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -403,10 +339,7 @@
           "table": "ertsalloc"
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -432,10 +365,7 @@
           }
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -461,10 +391,7 @@
           }
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -490,10 +417,7 @@
           }
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -519,10 +443,7 @@
           }
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -548,10 +469,7 @@
           }
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -577,10 +495,7 @@
           }
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -610,10 +525,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_POSTGRES}"
-      },
+      "datasource": "Postgres",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -691,10 +603,7 @@
       "pluginVersion": "10.2.2",
       "targets": [
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
@@ -743,18 +652,12 @@
           "table": "memory"
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "hide": false,
           "refId": "B"
         },
         {
-          "datasource": {
-            "type": "postgres",
-            "uid": "${DS_POSTGRES}"
-          },
+          "datasource": "Postgres",
           "editorMode": "code",
           "format": "table",
           "hide": false,
@@ -791,10 +694,7 @@
     "list": [
       {
         "current": {},
-        "datasource": {
-          "type": "postgres",
-          "uid": "${DS_POSTGRES}"
-        },
+        "datasource": "Postgres",
         "definition": "SELECT DISTINCT node FROM node ORDER BY node ASC;",
         "hide": 0,
         "includeAll": false,
