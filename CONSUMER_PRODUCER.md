@@ -129,6 +129,10 @@ CONSUMER_CRLDIR="/home/system_monitor/CA/crl"
 
 ## Setup the Producer (the client at the target node)
 
+>[!NOTE]
+> This it not necessary if running over TCP only!
+> Just disable TLS in the producer.env file.
+
 Start by installing the client certificates we put in the tar file.
 
 ```shell
